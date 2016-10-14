@@ -1,0 +1,7 @@
+[package]
+name = "testrs"
+version = "0.1.0"
+authors = ["Ben Batha <bhbatha@gmail.com>"]
+
+[dependencies]
+variance = "^0.1"
