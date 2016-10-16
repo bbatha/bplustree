@@ -257,6 +257,22 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
 
         new
     }
+
+    fn get_pair<'a>(&'a mut self, offset: usize) -> Option<(&'a K, &'a V)> {
+        match (self.keys.get(offset).and_then(Option::as_ref),
+               self.data.get(offset).and_then(Option::as_ref)) {
+            (Some(k), Some(d)) => Some((k, d)),
+            (_, _) => None,
+        }
+    }
+
+    fn get_pair_mut<'a>(&'a mut self, offset: usize) -> Option<(&'a K, &'a mut V)> {
+        match (self.keys.get(offset).and_then(Option::as_ref),
+               self.data.get_mut(offset).and_then(Option::as_mut)) {
+            (Some(k), Some(d)) => Some((k, d)),
+            (_, _) => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -478,20 +494,15 @@ impl<'a, K, V> Iterator for Iter<'a, K, V>
     type Item = (&'a K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(leaf) = self.tree.leaves.get(self.leaf_index) {
-            if self.offset > leaf.keys.len() {
-                self.offset = 0;
-                self.leaf_index.0 += 1;
-                self.next()
-            } else {
-                let key = leaf.keys[self.offset].as_ref().expect("length checked above");
-                let data = leaf.data[self.offset].as_ref().expect("keys should always have data");
+        while let Some(leaf) = self.tree.leaves.get(self.leaf_index) {
+            if let item @ Some(_) = leaf.get_pair(self.offset) {
                 self.offset += 1;
-                Some((key, data))
+                return item;
+            } else {
+                self.leaf_index.0 += 1
             }
-        } else {
-            None
         }
+        None
     }
 }
 
@@ -508,25 +519,15 @@ impl<'a, K, V> Iterator for IterMut<'a, K, V>
     type Item = (&'a K, &'a mut V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        unimplemented!()
-        // let ref mut leaves = self.tree.leaves.0;
-        // let leaf = leaves.get_mut(self.leaf_index);
-        // if let Some(leaf) = leaf {
-        // if self.offset > leaf.keys.len() {
-        // self.offset = 0;
-        // self.leaf_index += 1;
-        // None
-        // self.next()
-        // } else {
-        // let key = leaf.keys[self.offset].as_ref().expect("length checked above");
-        // let data = leaf.data[self.offset].as_mut().expect("keys should always have data");
-        // self.offset += 1;
-        // Some((key, data))
-        // }
-        // } else {
-        // None
-        // }
-        //
+        while let Some(leaf) = self.tree.leaves.get_mut(self.leaf_index) {
+            if let item @ Some(_) = leaf.get_pair_mut(self.offset) {
+                self.offset += 1;
+                return item;
+            } else {
+                self.leaf_index.0 += 1
+            }
+        }
+        None
     }
 }
 
