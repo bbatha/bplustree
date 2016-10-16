@@ -18,6 +18,20 @@ enum NodeIndex {
     Leaf(LeafIdx),
 }
 
+impl NodeIndex {
+    fn is_leaf(&self) -> bool {
+        match self {
+            &NodeIndex::Inner(_) => false,
+            &NodeIndex::Leaf(_) => true,
+        }
+    }
+
+    fn is_inner(&self) -> bool {
+        !self.is_leaf()
+    }
+}
+
+
 impl From<InnerIdx> for NodeIndex {
     fn from(idx: InnerIdx) -> Self {
         return NodeIndex::Inner(idx);
@@ -73,6 +87,38 @@ impl<K: Ord + Copy + Debug> Inner<K> {
         }
 
         self.right.expect("key is greater than all contained keys")
+    }
+
+    fn get<'a>(&'a self, key: K) -> Option<&'a NodeIndex> {
+        self.keys
+            .iter()
+            .position(|k| &Some(key) == k)
+            .and_then(|i| self.pointers.get(i).and_then(|p| p.as_ref()))
+    }
+
+    fn get_mut<'a>(&'a mut self, key: K) -> Option<&'a mut NodeIndex> {
+        self.keys
+            .iter()
+            .position(|k| &Some(key) == k)
+            .and_then(move |i| self.pointers.get_mut(i).and_then(|p| p.as_mut()))
+    }
+
+    fn remove(&mut self, key: K) {
+        // OPTIMIZE really dumb algo
+        if let Some(i) = self.keys.iter().position(|k| &Some(key) == k) {
+            self.keys[i].take();
+            let data = self.pointers[i].take();
+            assert!(data.is_some(), "keys should have data");
+            self.keys.sort();
+            use std::cmp::Ordering;
+            self.pointers.sort_by(|a, b| {
+                match (a, b) {
+                    (&Some(_), &None) => Ordering::Greater,
+                    (&None, &Some(_)) => Ordering::Less,
+                    (_, _) => Ordering::Equal,
+                }
+            });
+        }
     }
 
     // splits the node and returns a new one if there was no room in the
@@ -131,10 +177,45 @@ impl<K: Ord + Copy + Debug> Inner<K> {
 
         new
     }
+
+    fn balanced(&self) -> bool {
+        self.keys.iter().filter(|x| x.is_some()).count() > (self.keys.len() / 2)
+    }
+
+    fn redistribute(&mut self,
+                    left: &mut Option<Self>,
+                    right: &mut Option<Self>)
+                    -> Option<(K, InnerIdx)> {
+        unimplemented!()
+    }
+
+    fn merge(&mut self, left: &mut Option<Self>, right: &mut Option<Self>) -> Option<InnerIdx> {
+        unimplemented!()
+    }
+}
+
+impl<K: Copy + Ord + Debug> Index<K> for Inner<K> {
+    type Output = NodeIndex;
+
+    fn index<'a>(&'a self, key: K) -> &'a Self::Output {
+        self.get(key).unwrap()
+    }
+}
+
+impl<K: Copy + Ord + Debug> IndexMut<K> for Inner<K> {
+    fn index_mut<'a>(&'a mut self, key: K) -> &'a mut Self::Output {
+        self.get_mut(key).unwrap()
+    }
 }
 
 #[derive(Default, Debug, PartialEq, PartialOrd, Ord, Eq, Hash)]
 struct Inners<K>(Vec<Inner<K>>);
+
+enum InnersBalanceResult<K> {
+    Balanced,
+    Redistributed(InnerIdx, K, InnerIdx),
+    Merged(Option<InnerIdx>),
+}
 
 impl<K: Ord + Copy + Debug> Inners<K> {
     /// Finds the index of leaf node that most closely matches key
@@ -158,6 +239,64 @@ impl<K: Ord + Copy + Debug> Inners<K> {
 
     fn get_mut<'a>(&'a mut self, InnerIdx(idx): InnerIdx) -> Option<&'a mut Inner<K>> {
         self.0.get_mut(idx)
+    }
+
+    fn balance(&mut self, target: InnerIdx, key: K) -> InnersBalanceResult<K> {
+        if self[target].balanced() {
+            return InnersBalanceResult::Balanced;
+        }
+
+        let (curr, left, right) = self.current_and_siblings_mut(target, key);
+        if let Some((split_key, split_idx)) = curr.redistribute(left, right) {
+            let parent = curr.parent.expect("cant redistribute root node");
+            InnersBalanceResult::Redistributed(parent, split_key, split_idx)
+        } else {
+            InnersBalanceResult::Merged(curr.merge(left, right))
+        }
+    }
+
+    fn current_and_siblings_mut<'a>
+        (&'a mut self,
+         target: InnerIdx,
+         key: K)
+         -> (&'a mut Inner<K>, &'a mut Option<Inner<K>>, &'a mut Option<Inner<K>>) {
+        unimplemented!();
+    }
+
+    fn remove(&mut self, target: InnerIdx, key: K, last: NodeIndex) -> Option<NodeIndex> {
+        let mut target = target;
+        let mut last = last;
+        loop {
+            self[target].remove(key);
+            match self.balance(target, key) {
+                InnersBalanceResult::Balanced => return None,
+                InnersBalanceResult::Redistributed(parent, split_key, split_idx) => {
+                    self[parent][split_key] = NodeIndex::Inner(split_idx);
+                    return None;
+                }
+                InnersBalanceResult::Merged(parent) => {
+                    if let Some(parent) = parent {
+                        self.0.remove(target.0);
+                        last = NodeIndex::Inner(target);
+                        target = parent;
+                    } else {
+                        return Some(last);
+                    }
+                }
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.0.clear()
+    }
+
+    fn next_index(&mut self) -> InnerIdx {
+        InnerIdx(self.0.len())
+    }
+
+    fn push(&mut self, new: Inner<K>) {
+        self.0.push(new)
     }
 }
 
@@ -245,6 +384,31 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
         }
     }
 
+    fn remove(&mut self, key: K) -> Option<V> {
+        // OPTIMIZE really dumb algo
+        if let Some(i) = self.keys.iter().position(|k| &Some(key) == k) {
+            self.keys[i].take();
+            let data = self.data[i].take();
+            assert!(data.is_some(), "keys should have data");
+            self.keys.sort();
+            use std::cmp::Ordering;
+            self.data.sort_by(|a, b| {
+                match (a, b) {
+                    (&Some(_), &None) => Ordering::Greater,
+                    (&None, &Some(_)) => Ordering::Less,
+                    (_, _) => Ordering::Equal,
+                }
+            });
+            data
+        } else {
+            None
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.keys.iter().all(|x| x.is_none())
+    }
+
     fn split(&mut self) -> Leaf<K, V> {
         let mut new = Leaf::new(self.next);
         new.parent = self.parent;
@@ -270,6 +434,21 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
     fn iter_mut<'a>(&'a mut self) -> LeafIterMut<'a, K, V> {
         self.keys.iter().zip(self.data.iter_mut())
     }
+
+    fn balanced(&self) -> bool {
+        self.keys.iter().filter(|x| x.is_some()).count() > (self.keys.len() / 2)
+    }
+
+    fn redistribute(&mut self,
+                    left: &mut Option<Self>,
+                    right: &mut Option<Self>)
+                    -> Option<(K, LeafIdx)> {
+        unimplemented!()
+    }
+
+    fn merge(&mut self, left: &mut Option<Self>, right: &mut Option<Self>) -> InnerIdx {
+        unimplemented!()
+    }
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
@@ -278,6 +457,12 @@ struct Leaves<K, V>(Vec<Leaf<K, V>>);
 enum LeavesInsertResult<V> {
     Inserted(Option<V>),
     Split(Option<InnerIdx>, LeafIdx),
+}
+
+enum LeavesBalanceResult<K> {
+    Balanced,
+    Redistributed(InnerIdx, K, LeafIdx),
+    Merged(InnerIdx),
 }
 
 impl<K: Ord + Copy + Debug, V: Debug> Leaves<K, V> {
@@ -309,6 +494,38 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaves<K, V> {
         }
     }
 
+    fn balance(&mut self, target: LeafIdx, key: K, inners: &Inners<K>) -> LeavesBalanceResult<K> {
+        if self[target].balanced() {
+            return LeavesBalanceResult::Balanced;
+        }
+
+        let (curr, left, right) = self.current_and_siblings_mut(target, key, inners);
+        if let Some((split_key, split_idx)) = curr.redistribute(left, right) {
+            let parent = curr.parent.expect("cant redistribute root node");
+            LeavesBalanceResult::Redistributed(parent, split_key, split_idx)
+        } else {
+            LeavesBalanceResult::Merged(curr.merge(left, right))
+        }
+    }
+
+    fn current_and_siblings_mut<'a>
+        (&'a mut self,
+         target: LeafIdx,
+         key: K,
+         inners: &Inners<K>)
+         -> (&'a mut Leaf<K, V>, &'a mut Option<Leaf<K, V>>, &'a mut Option<Leaf<K, V>>) {
+        // sigh this will involve abusing split_at or using unsafe
+        unimplemented!()
+    }
+
+    fn remove(&mut self, i: LeafIdx) {
+        assert!(!self[i].is_empty(),
+                "attempted to remove a leaf with data in it");
+        // TODO do nothing here, and add the index to a free list, which can be
+        // used during compaction
+        self.0.remove(i.0);
+    }
+
     fn get<'a>(&'a self, LeafIdx(idx): LeafIdx) -> Option<&'a Leaf<K, V>> {
         self.0.get(idx)
     }
@@ -329,6 +546,10 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaves<K, V> {
             leaves: &mut self.0,
             current: Some(start),
         }
+    }
+
+    fn clear(&mut self) {
+        self.0.clear()
     }
 }
 
@@ -429,8 +650,8 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
     }
 
     pub fn clear(&mut self) {
-        self.inners.0.clear();
-        self.leaves.0.clear();
+        self.inners.clear();
+        self.leaves.clear();
     }
 
     pub fn contains_key(&self, key: K) -> bool {
@@ -452,24 +673,24 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
             if let Some(new) = new {
                 // we had a split, shuffle to the parent
                 last = new_node_idx;
-                new_node_idx = NodeIndex::Inner(InnerIdx(self.inners.0.len()));
+                new_node_idx = NodeIndex::Inner(self.inners.next_index());
                 parent = new.parent;
-                self.inners.0.push(new);
+                self.inners.push(new);
             } else {
                 // it fit, we are done inserting
                 return None;
             }
         }
 
-        // single leaf is the root
-        if self.leaves.0.len() == 1 {
+        // whole tree is one leaf node, do not need to insert into inners
+        if self.root.is_leaf() {
             return None;
         }
 
         let mut new_root = Inner::new();
         new_root.right = Some(new_node_idx);
-        self.inners.0.push(new_root);
-        let new_root_idx = InnerIdx(self.inners.0.len() - 1);
+        let new_root_idx = self.inners.next_index();
+        self.inners.push(new_root);
         self.root = NodeIndex::Inner(new_root_idx);
 
         match (new_node_idx, last) {
@@ -484,6 +705,24 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
             (_, _) => panic!("mismatched node index types"),
         }
         None
+    }
+
+    pub fn remove(&mut self, key: K) -> Option<V> {
+        let target = self.find_leaf_index(key);
+        let removed = self.leaves[target].remove(key);
+
+        match self.leaves.balance(target, key, &self.inners) {
+            LeavesBalanceResult::Balanced => (),
+            LeavesBalanceResult::Redistributed(parent, split_key, split_idx) => {
+                self.inners[parent][split_key] = NodeIndex::Leaf(split_idx);
+            }
+            LeavesBalanceResult::Merged(parent) => {
+                if let Some(root) = self.inners.remove(parent, key, NodeIndex::Leaf(target)) {
+                    self.root = root;
+                }
+            }
+        };
+        removed
     }
 
     fn leftmost_leaf(&self) -> LeafIdx {
@@ -605,6 +844,10 @@ mod test {
             assert_eq!(tree[i], i);
             assert_eq!(tree.insert(i, i + 1), Some(i));
             assert_eq!(tree[i], i + 1);
+        }
+
+        for i in 0..10 {
+            assert_eq!(tree.remove(i), Some(i + 1));
         }
     }
 }
