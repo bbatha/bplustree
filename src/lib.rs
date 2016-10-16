@@ -499,6 +499,7 @@ impl<'a, K, V> Iterator for Iter<'a, K, V>
                 self.offset += 1;
                 return item;
             } else {
+                self.offset = 0;
                 self.leaf_index.0 += 1
             }
         }
@@ -524,6 +525,7 @@ impl<'a, K, V> Iterator for IterMut<'a, K, V>
                 self.offset += 1;
                 return item;
             } else {
+                self.offset = 0;
                 self.leaf_index.0 += 1
             }
         }
