@@ -1,5 +1,7 @@
 use std::ops::{Index, IndexMut};
 use std::fmt::Debug;
+use std::slice;
+use std::iter;
 
 const ORDER: usize = 4; // Must be at least 2
 const BRANCHING_FACTOR: usize = ORDER - 1;
@@ -181,6 +183,10 @@ struct Leaf<K, V> {
     next: Option<LeafIdx>,
 }
 
+type LeafIter<'a, K: 'a, V: 'a> = iter::Zip<slice::Iter<'a, Option<K>>, slice::Iter<'a, Option<V>>>;
+type LeafIterMut<'a, K: 'a, V: 'a> = iter::Zip<slice::Iter<'a, Option<K>>,
+                                               slice::IterMut<'a, Option<V>>>;
+
 impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
     fn new(next: Option<LeafIdx>) -> Leaf<K, V> {
         Leaf {
@@ -258,20 +264,12 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
         new
     }
 
-    fn get_pair<'a>(&'a mut self, offset: usize) -> Option<(&'a K, &'a V)> {
-        match (self.keys.get(offset).and_then(Option::as_ref),
-               self.data.get(offset).and_then(Option::as_ref)) {
-            (Some(k), Some(d)) => Some((k, d)),
-            (_, _) => None,
-        }
+    fn iter<'a>(&'a self) -> LeafIter<'a, K, V> {
+        self.keys.iter().zip(self.data.iter())
     }
 
-    fn get_pair_mut<'a>(&'a mut self, offset: usize) -> Option<(&'a K, &'a mut V)> {
-        match (self.keys.get(offset).and_then(Option::as_ref),
-               self.data.get_mut(offset).and_then(Option::as_mut)) {
-            (Some(k), Some(d)) => Some((k, d)),
-            (_, _) => None,
-        }
+    fn iter_mut<'a>(&'a mut self) -> LeafIterMut<'a, K, V> {
+        self.keys.iter().zip(self.data.iter_mut())
     }
 }
 
@@ -318,7 +316,65 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaves<K, V> {
     fn get_mut<'a>(&'a mut self, LeafIdx(idx): LeafIdx) -> Option<&'a mut Leaf<K, V>> {
         self.0.get_mut(idx)
     }
+
+    fn iter<'a>(&'a self, start: LeafIdx) -> LeavesIter<'a, K, V> {
+        LeavesIter {
+            leaves: &self.0,
+            current: Some(start),
+        }
+    }
+
+    fn iter_mut<'a>(&'a mut self, start: LeafIdx) -> LeavesIterMut<'a, K, V> {
+        LeavesIterMut {
+            leaves: &mut self.0,
+            current: Some(start),
+        }
+    }
 }
+
+struct LeavesIter<'a, K: 'a, V: 'a> {
+    leaves: &'a [Leaf<K, V>],
+    current: Option<LeafIdx>,
+}
+
+impl<'a, K, V> Iterator for LeavesIter<'a, K, V> {
+    type Item = &'a Leaf<K, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(i) = self.current {
+            let next = &self.leaves[i.0];
+            self.current = next.next;
+            Some(next)
+        } else {
+            None
+        }
+    }
+}
+
+struct LeavesIterMut<'a, K: 'a, V: 'a> {
+    leaves: &'a mut [Leaf<K, V>],
+    current: Option<LeafIdx>,
+}
+
+impl<'a, K, V> Iterator for LeavesIterMut<'a, K, V> {
+    type Item = &'a mut Leaf<K, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(LeafIdx(i)) = self.current {
+            unsafe {
+                let leaf_ptr = self.leaves.as_mut_ptr();
+                if i < self.leaves.len() {
+                    Some(leaf_ptr.offset(i as isize).as_mut().expect("no null elems"))
+                } else {
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    }
+}
+
 
 impl<K: Copy + Ord + Debug, V: Debug> Index<LeafIdx> for Leaves<K, V> {
     type Output = Leaf<K, V>;
@@ -432,40 +488,29 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
         replaced
     }
 
-    pub fn iter<'a>(&'a self) -> Iter<'a, K, V> {
+    fn leftmost_leaf(&self) -> LeafIdx {
         let mut first_leaf = self.root;
         while let NodeIndex::Inner(x) = first_leaf {
             first_leaf = self.inners[x].pointers[0].expect("should always have at least one key");
         }
 
         if let NodeIndex::Leaf(x) = first_leaf {
-            Iter {
-                leaf_index: x,
-                offset: 0,
-                tree: self,
-            }
+            x
         } else {
             unreachable!()
         }
+    }
+
+    pub fn iter<'a>(&'a self) -> Iter<'a, K, V> {
+        Iter(self.leaves.iter(self.leftmost_leaf()).flat_map(Leaf::iter))
     }
 
     pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, K, V> {
-        let mut first_leaf = self.root;
-        while let NodeIndex::Inner(x) = first_leaf {
-            first_leaf = self.inners[x].pointers[0].expect("should always have at least one key");
-        }
-
-        if let NodeIndex::Leaf(x) = first_leaf {
-            IterMut {
-                leaf_index: x,
-                offset: 0,
-                tree: self,
-            }
-        } else {
-            unreachable!()
-        }
+        let start = self.leftmost_leaf();
+        IterMut(self.leaves.iter_mut(start).flat_map(Leaf::iter_mut))
     }
 }
+
 
 impl<K: Copy + Ord + Debug, V: Debug> Index<K> for BPlusTree<K, V> {
     type Output = V;
@@ -481,11 +526,10 @@ impl<K: Copy + Ord + Debug, V: Debug> IndexMut<K> for BPlusTree<K, V> {
     }
 }
 
-pub struct Iter<'a, K: 'a, V: 'a> {
-    leaf_index: LeafIdx,
-    offset: usize,
-    tree: &'a BPlusTree<K, V>,
-}
+// impl trait methods would be killer here
+pub struct Iter<'a, K: 'a, V: 'a>(iter::FlatMap<LeavesIter<'a, K, V>,
+                                                LeafIter<'a, K, V>,
+                                                fn(&'a Leaf<K, V>) -> LeafIter<'a, K, V>>);
 
 impl<'a, K, V> Iterator for Iter<'a, K, V>
     where K: 'a + Copy + Ord + Debug,
@@ -494,24 +538,19 @@ impl<'a, K, V> Iterator for Iter<'a, K, V>
     type Item = (&'a K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(leaf) = self.tree.leaves.get(self.leaf_index) {
-            if let item @ Some(_) = leaf.get_pair(self.offset) {
-                self.offset += 1;
-                return item;
-            } else {
-                self.offset = 0;
-                self.leaf_index.0 += 1
+        self.0.next().and_then(|(k, d)| {
+            match (k, d) {
+                (&Some(ref k), &Some(ref d)) => Some((k, d)),
+                (_, _) => None,
             }
-        }
-        None
+        })
     }
 }
 
-pub struct IterMut<'a, K: 'a, V: 'a> {
-    leaf_index: LeafIdx,
-    offset: usize,
-    tree: &'a mut BPlusTree<K, V>,
-}
+
+pub struct IterMut<'a, K: 'a, V: 'a>(iter::FlatMap<LeavesIterMut<'a, K, V>,
+                                                   LeafIterMut<'a, K, V>,
+                                                   fn(&'a mut Leaf<K, V>) -> LeafIterMut<'a, K, V>>);
 
 impl<'a, K, V> Iterator for IterMut<'a, K, V>
     where K: 'a + Copy + Ord + Debug,
@@ -520,16 +559,39 @@ impl<'a, K, V> Iterator for IterMut<'a, K, V>
     type Item = (&'a K, &'a mut V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(leaf) = self.tree.leaves.get_mut(self.leaf_index) {
-            if let item @ Some(_) = leaf.get_pair_mut(self.offset) {
-                self.offset += 1;
-                return item;
-            } else {
-                self.offset = 0;
-                self.leaf_index.0 += 1
+        self.0.next().and_then(|(k, d)| {
+            match (k, d) {
+                (&Some(ref k), &mut Some(ref mut d)) => Some((k, d)),
+                (_, _) => None,
             }
+        })
+    }
+}
+
+impl<K, V> std::iter::FromIterator<(K, V)> for BPlusTree<K, V>
+    where K: Copy + Ord + Debug,
+          V: Debug
+{
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        let mut tree = BPlusTree::new();
+        for (k, v) in iter {
+            tree.insert(k, v);
         }
-        None
+
+        tree
+    }
+}
+
+impl<K, V> Extend<(K, V)> for BPlusTree<K, V>
+    where K: Copy + Ord + Debug,
+          V: Debug
+{
+    fn extend<T>(&mut self, iter: T)
+        where T: IntoIterator<Item = (K, V)>
+    {
+        for (k, v) in iter {
+            self.insert(k, v);
+        }
     }
 }
 
