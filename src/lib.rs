@@ -5,10 +5,29 @@ const ORDER: usize = 4; // Must be at least 2
 const BRANCHING_FACTOR: usize = ORDER - 1;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
+struct InnerIdx(usize);
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
+struct LeafIdx(usize);
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
 enum NodeIndex {
-    Inner(usize),
-    Leaf(usize),
+    Inner(InnerIdx),
+    Leaf(LeafIdx),
 }
+
+impl From<InnerIdx> for NodeIndex {
+    fn from(idx: InnerIdx) -> Self {
+        return NodeIndex::Inner(idx);
+    }
+}
+
+impl From<LeafIdx> for NodeIndex {
+    fn from(idx: LeafIdx) -> Self {
+        return NodeIndex::Leaf(idx);
+    }
+}
+
 
 // None can safely act like its copy
 macro_rules! option_arr {
@@ -25,7 +44,7 @@ macro_rules! option_arr {
 
 #[derive(Debug, PartialEq, Eq, Ord, PartialOrd)]
 struct Inner<K> {
-    parent: Option<usize>,
+    parent: Option<InnerIdx>,
     keys: [Option<K>; BRANCHING_FACTOR],
     pointers: [Option<NodeIndex>; BRANCHING_FACTOR],
     right: Option<NodeIndex>,
@@ -112,40 +131,58 @@ impl<K: Ord + Copy + Debug> Inner<K> {
     }
 }
 
-
 #[derive(Default, Debug)]
 struct Inners<K>(Vec<Inner<K>>);
 
-
 impl<K: Ord + Copy + Debug> Inners<K> {
     /// Finds the index of leaf node that most closely matches key
-    fn find_leaf_index(&self, prev: usize, key: K) -> usize {
+    fn find_leaf_index(&self, prev: InnerIdx, key: K) -> LeafIdx {
         if self.0.is_empty() {
-            return 0; // to handle lazy alloc of inners
+            return LeafIdx(0); // to handle lazy alloc of inners
         }
 
-        let mut prev = NodeIndex::Inner(prev);
-        while let NodeIndex::Inner(x) = prev {
-            prev = self.0[x].find_node_index(key);
+        let mut prev = prev;
+        loop {
+            match self[prev].find_node_index(key) {
+                NodeIndex::Inner(x) => prev = x,
+                NodeIndex::Leaf(x) => return x,
+            };
         }
+    }
 
-        match prev {
-            NodeIndex::Inner(_) => unreachable!(),
-            NodeIndex::Leaf(x) => x,
-        }
+    fn get<'a>(&'a self, InnerIdx(idx): InnerIdx) -> Option<&'a Inner<K>> {
+        self.0.get(idx)
+    }
+
+    fn get_mut<'a>(&'a mut self, InnerIdx(idx): InnerIdx) -> Option<&'a mut Inner<K>> {
+        self.0.get_mut(idx)
+    }
+}
+
+impl<K: Copy + Ord + Debug> Index<InnerIdx> for Inners<K> {
+    type Output = Inner<K>;
+
+    fn index<'a>(&'a self, idx: InnerIdx) -> &'a Self::Output {
+        self.get(idx).unwrap()
+    }
+}
+
+impl<K: Copy + Ord + Debug> IndexMut<InnerIdx> for Inners<K> {
+    fn index_mut<'a>(&'a mut self, idx: InnerIdx) -> &'a mut Self::Output {
+        self.get_mut(idx).unwrap()
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Ord, PartialOrd)]
 struct Leaf<K, V> {
-    parent: Option<usize>,
+    parent: Option<InnerIdx>,
     keys: [Option<K>; BRANCHING_FACTOR],
     data: [Option<V>; BRANCHING_FACTOR],
-    next: Option<usize>,
+    next: Option<LeafIdx>,
 }
 
 impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
-    fn new(next: Option<usize>) -> Leaf<K, V> {
+    fn new(next: Option<LeafIdx>) -> Leaf<K, V> {
         Leaf {
             parent: None,
             keys: [None; BRANCHING_FACTOR],
@@ -168,18 +205,12 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
             .and_then(move |i| self.data.get_mut(i).and_then(|v| v.as_mut()))
     }
 
-    fn get_mut_by_offset<'a>(&'a mut self, offset: usize) -> Option<(&'a K, &'a mut V)> {
-        if offset > self.keys.len() {
-            return None;
-        }
-
-        let ref key = self.keys[offset].unwrap();
-        let ref mut data = self.data[offset].unwrap();
-        Some((key, data))
-    }
-
     // returns Some(Leaf<K, V>) if the node splits on insert, Some(V) if a value was overwriten
-    fn insert(&mut self, key: K, data: V, index: Option<usize>) -> (Option<Leaf<K, V>>, Option<V>) {
+    fn insert(&mut self,
+              key: K,
+              data: V,
+              index: Option<LeafIdx>)
+              -> (Option<Leaf<K, V>>, Option<V>) {
         let mut insert_key = Some(key);
         let mut insert_data = Some(data);
         for (k, p) in self.keys.iter_mut().zip(self.data.iter_mut()) {
@@ -237,10 +268,12 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaves<K, V> {
     fn insert(&mut self,
               key: K,
               value: V,
-              target: usize)
-              -> (Option<usize>, Option<NodeIndex>, Option<V>) {
+              target: LeafIdx)
+              -> (Option<InnerIdx>, Option<NodeIndex>, Option<V>) {
         if self.0.is_empty() {
-            assert_eq!(target, 0, "should only be empty and receive a target 0");
+            assert_eq!(target,
+                       LeafIdx(0),
+                       "should only be empty and receive a target 0");
             let mut leaf = Leaf::new(None);
             if let (None, None) = leaf.insert(key, value, None) {
             } else {
@@ -251,15 +284,37 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaves<K, V> {
             return (parent, None, None);
         }
 
-        let last = self.0.len();
-        let (new, replaced) = self.0[target].insert(key, value, Some(last));
+        let last = LeafIdx(self.0.len());
+        let (new, replaced) = self[target].insert(key, value, Some(last));
         if let Some(new) = new {
             let parent = new.parent;
             self.0.push(new);
             (parent, Some(NodeIndex::Leaf(last)), replaced)
         } else {
-            (self.0[target].parent, None, replaced)
+            (self[target].parent, None, replaced)
         }
+    }
+
+    fn get<'a>(&'a self, LeafIdx(idx): LeafIdx) -> Option<&'a Leaf<K, V>> {
+        self.0.get(idx)
+    }
+
+    fn get_mut<'a>(&'a mut self, LeafIdx(idx): LeafIdx) -> Option<&'a mut Leaf<K, V>> {
+        self.0.get_mut(idx)
+    }
+}
+
+impl<K: Copy + Ord + Debug, V: Debug> Index<LeafIdx> for Leaves<K, V> {
+    type Output = Leaf<K, V>;
+
+    fn index<'a>(&'a self, idx: LeafIdx) -> &'a Self::Output {
+        self.get(idx).unwrap()
+    }
+}
+
+impl<K: Copy + Ord + Debug, V: Debug> IndexMut<LeafIdx> for Leaves<K, V> {
+    fn index_mut<'a>(&'a mut self, idx: LeafIdx) -> &'a mut Self::Output {
+        self.get_mut(idx).unwrap()
     }
 }
 
@@ -280,13 +335,13 @@ impl<K: Copy + Ord + Debug, V: Debug> Default for BPlusTree<K, V> {
 impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
     pub fn new() -> BPlusTree<K, V> {
         BPlusTree {
-            root: NodeIndex::Leaf(0),
+            root: NodeIndex::Leaf(LeafIdx(0)),
             inners: Inners(Vec::new()),
             leaves: Leaves(Vec::new()),
         }
     }
 
-    fn find_leaf_index(&self, key: K) -> usize {
+    fn find_leaf_index(&self, key: K) -> LeafIdx {
         match self.root {
             NodeIndex::Leaf(x) => x,
             NodeIndex::Inner(x) => self.inners.find_leaf_index(x, key),
@@ -294,12 +349,12 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
     }
 
     pub fn get<'a>(&'a self, key: K) -> Option<&'a V> {
-        self.leaves.0[self.find_leaf_index(key)].get(key)
+        self.leaves[self.find_leaf_index(key)].get(key)
     }
 
     pub fn get_mut<'a>(&'a mut self, key: K) -> Option<&'a mut V> {
         let idx = self.find_leaf_index(key);
-        self.leaves.0[idx].get_mut(key)
+        self.leaves[idx].get_mut(key)
     }
 
     pub fn clear(&mut self) {
@@ -314,18 +369,20 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         let leaf_idx = self.find_leaf_index(key);
-        let (mut parent, new_leaf_idx, replaced) = self.leaves.insert(key, value, leaf_idx);
-        let mut last_inserted = if let Some(idx) = new_leaf_idx {
+        let (mut parent, new_node_idx, replaced) = self.leaves.insert(key, value, leaf_idx);
+        let mut new_node_idx = if let Some(idx) = new_node_idx {
             idx
         } else {
             return replaced;
         };
 
+        let mut last = NodeIndex::Leaf(leaf_idx);
         while let Some(p) = parent {
-            let new = self.inners.0[p].insert(key, last_inserted);
+            let new = self.inners[p].insert(key, new_node_idx);
             if let Some(new) = new {
                 // we had a split, shuffle to the parent
-                last_inserted = NodeIndex::Inner(self.inners.0.len());
+                last = new_node_idx;
+                new_node_idx = NodeIndex::Inner(InnerIdx(self.inners.0.len()));
                 parent = new.parent;
                 self.inners.0.push(new);
             } else {
@@ -334,26 +391,27 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
             }
         }
 
-        // signle leaf is the root
+        // single leaf is the root
         if self.leaves.0.len() == 1 {
             return replaced;
         }
 
         let mut new_root = Inner::new();
-        new_root.right = Some(last_inserted);
+        new_root.right = Some(new_node_idx);
         self.inners.0.push(new_root);
-        let new_root_idx = self.inners.0.len() - 1;
+        let new_root_idx = InnerIdx(self.inners.0.len() - 1);
         self.root = NodeIndex::Inner(new_root_idx);
 
-        match last_inserted {
-            NodeIndex::Leaf(last) => {
-                self.leaves.0[leaf_idx].parent = Some(new_root_idx);
-                self.leaves.0[last].parent = Some(new_root_idx);
+        match (new_node_idx, last) {
+            (NodeIndex::Leaf(new), NodeIndex::Leaf(last)) => {
+                self.leaves[last].parent = Some(new_root_idx);
+                self.leaves[new].parent = Some(new_root_idx);
             }
-            NodeIndex::Inner(last) => {
-                self.inners.0[leaf_idx].parent = Some(new_root_idx);
-                self.inners.0[last].parent = Some(new_root_idx);
+            (NodeIndex::Inner(new), NodeIndex::Inner(last)) => {
+                self.inners[last].parent = Some(new_root_idx);
+                self.inners[new].parent = Some(new_root_idx);
             }
+            (_, _) => panic!("mismatched node index types"),
         }
         replaced
     }
@@ -361,7 +419,7 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
     pub fn iter<'a>(&'a self) -> Iter<'a, K, V> {
         let mut first_leaf = self.root;
         while let NodeIndex::Inner(x) = first_leaf {
-            first_leaf = self.inners.0[x].pointers[0].expect("should always have at least one key");
+            first_leaf = self.inners[x].pointers[0].expect("should always have at least one key");
         }
 
         if let NodeIndex::Leaf(x) = first_leaf {
@@ -378,7 +436,7 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
     pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, K, V> {
         let mut first_leaf = self.root;
         while let NodeIndex::Inner(x) = first_leaf {
-            first_leaf = self.inners.0[x].pointers[0].expect("should always have at least one key");
+            first_leaf = self.inners[x].pointers[0].expect("should always have at least one key");
         }
 
         if let NodeIndex::Leaf(x) = first_leaf {
@@ -408,7 +466,7 @@ impl<K: Copy + Ord + Debug, V: Debug> IndexMut<K> for BPlusTree<K, V> {
 }
 
 pub struct Iter<'a, K: 'a, V: 'a> {
-    leaf_index: usize,
+    leaf_index: LeafIdx,
     offset: usize,
     tree: &'a BPlusTree<K, V>,
 }
@@ -420,10 +478,10 @@ impl<'a, K, V> Iterator for Iter<'a, K, V>
     type Item = (&'a K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(leaf) = self.tree.leaves.0.get(self.leaf_index) {
+        if let Some(leaf) = self.tree.leaves.get(self.leaf_index) {
             if self.offset > leaf.keys.len() {
                 self.offset = 0;
-                self.leaf_index += 1;
+                self.leaf_index.0 += 1;
                 self.next()
             } else {
                 let key = leaf.keys[self.offset].as_ref().expect("length checked above");
@@ -438,7 +496,7 @@ impl<'a, K, V> Iterator for Iter<'a, K, V>
 }
 
 pub struct IterMut<'a, K: 'a, V: 'a> {
-    leaf_index: usize,
+    leaf_index: LeafIdx,
     offset: usize,
     tree: &'a mut BPlusTree<K, V>,
 }
