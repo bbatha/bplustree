@@ -168,6 +168,16 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
             .and_then(move |i| self.data.get_mut(i).and_then(|v| v.as_mut()))
     }
 
+    fn get_mut_by_offset<'a>(&'a mut self, offset: usize) -> Option<(&'a K, &'a mut V)> {
+        if offset > self.keys.len() {
+            return None;
+        }
+
+        let ref key = self.keys[offset].unwrap();
+        let ref mut data = self.data[offset].unwrap();
+        Some((key, data))
+    }
+
     // returns Some(Leaf<K, V>) if the node splits on insert, Some(V) if a value was overwriten
     fn insert(&mut self, key: K, data: V, index: Option<usize>) -> (Option<Leaf<K, V>>, Option<V>) {
         let mut insert_key = Some(key);
@@ -347,6 +357,40 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
         }
         replaced
     }
+
+    pub fn iter<'a>(&'a self) -> Iter<'a, K, V> {
+        let mut first_leaf = self.root;
+        while let NodeIndex::Inner(x) = first_leaf {
+            first_leaf = self.inners.0[x].pointers[0].expect("should always have at least one key");
+        }
+
+        if let NodeIndex::Leaf(x) = first_leaf {
+            Iter {
+                leaf_index: x,
+                offset: 0,
+                tree: self,
+            }
+        } else {
+            unreachable!()
+        }
+    }
+
+    pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, K, V> {
+        let mut first_leaf = self.root;
+        while let NodeIndex::Inner(x) = first_leaf {
+            first_leaf = self.inners.0[x].pointers[0].expect("should always have at least one key");
+        }
+
+        if let NodeIndex::Leaf(x) = first_leaf {
+            IterMut {
+                leaf_index: x,
+                offset: 0,
+                tree: self,
+            }
+        } else {
+            unreachable!()
+        }
+    }
 }
 
 impl<K: Copy + Ord + Debug, V: Debug> Index<K> for BPlusTree<K, V> {
@@ -360,6 +404,71 @@ impl<K: Copy + Ord + Debug, V: Debug> Index<K> for BPlusTree<K, V> {
 impl<K: Copy + Ord + Debug, V: Debug> IndexMut<K> for BPlusTree<K, V> {
     fn index_mut<'a>(&'a mut self, key: K) -> &'a mut Self::Output {
         self.get_mut(key).unwrap()
+    }
+}
+
+pub struct Iter<'a, K: 'a, V: 'a> {
+    leaf_index: usize,
+    offset: usize,
+    tree: &'a BPlusTree<K, V>,
+}
+
+impl<'a, K, V> Iterator for Iter<'a, K, V>
+    where K: 'a + Copy + Ord + Debug,
+          V: 'a + Debug
+{
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(leaf) = self.tree.leaves.0.get(self.leaf_index) {
+            if self.offset > leaf.keys.len() {
+                self.offset = 0;
+                self.leaf_index += 1;
+                self.next()
+            } else {
+                let key = leaf.keys[self.offset].as_ref().expect("length checked above");
+                let data = leaf.data[self.offset].as_ref().expect("keys should always have data");
+                self.offset += 1;
+                Some((key, data))
+            }
+        } else {
+            None
+        }
+    }
+}
+
+pub struct IterMut<'a, K: 'a, V: 'a> {
+    leaf_index: usize,
+    offset: usize,
+    tree: &'a mut BPlusTree<K, V>,
+}
+
+impl<'a, K, V> Iterator for IterMut<'a, K, V>
+    where K: 'a + Copy + Ord + Debug,
+          V: 'a + Debug
+{
+    type Item = (&'a K, &'a mut V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        unimplemented!()
+        // let ref mut leaves = self.tree.leaves.0;
+        // let leaf = leaves.get_mut(self.leaf_index);
+        // if let Some(leaf) = leaf {
+        // if self.offset > leaf.keys.len() {
+        // self.offset = 0;
+        // self.leaf_index += 1;
+        // None
+        // self.next()
+        // } else {
+        // let key = leaf.keys[self.offset].as_ref().expect("length checked above");
+        // let data = leaf.data[self.offset].as_mut().expect("keys should always have data");
+        // self.offset += 1;
+        // Some((key, data))
+        // }
+        // } else {
+        // None
+        // }
+        //
     }
 }
 
