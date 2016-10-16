@@ -6,13 +6,13 @@ use std::iter;
 const ORDER: usize = 4; // Must be at least 2
 const BRANCHING_FACTOR: usize = ORDER - 1;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 struct InnerIdx(usize);
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 struct LeafIdx(usize);
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 enum NodeIndex {
     Inner(InnerIdx),
     Leaf(LeafIdx),
@@ -44,7 +44,7 @@ macro_rules! option_arr {
     };
 }
 
-#[derive(Debug, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, PartialEq, Eq, Ord, PartialOrd, Hash)]
 struct Inner<K> {
     parent: Option<InnerIdx>,
     keys: [Option<K>; BRANCHING_FACTOR],
@@ -133,7 +133,7 @@ impl<K: Ord + Copy + Debug> Inner<K> {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, PartialEq, PartialOrd, Ord, Eq, Hash)]
 struct Inners<K>(Vec<Inner<K>>);
 
 impl<K: Ord + Copy + Debug> Inners<K> {
@@ -175,7 +175,7 @@ impl<K: Copy + Ord + Debug> IndexMut<InnerIdx> for Inners<K> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, PartialEq, Eq, Ord, PartialOrd, Hash)]
 struct Leaf<K, V> {
     parent: Option<InnerIdx>,
     keys: [Option<K>; BRANCHING_FACTOR],
@@ -273,7 +273,7 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 struct Leaves<K, V>(Vec<Leaf<K, V>>);
 
 impl<K: Ord + Copy + Debug, V: Debug> Leaves<K, V> {
@@ -390,8 +390,7 @@ impl<K: Copy + Ord + Debug, V: Debug> IndexMut<LeafIdx> for Leaves<K, V> {
     }
 }
 
-// TODO: parameterize branching factor
-#[derive(Debug)]
+#[derive(Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
 pub struct BPlusTree<K, V> {
     inners: Inners<K>,
     leaves: Leaves<K, V>,
