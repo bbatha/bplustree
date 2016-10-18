@@ -187,6 +187,11 @@ type LeafIter<'a, K: 'a, V: 'a> = iter::Zip<slice::Iter<'a, Option<K>>, slice::I
 type LeafIterMut<'a, K: 'a, V: 'a> = iter::Zip<slice::Iter<'a, Option<K>>,
                                                slice::IterMut<'a, Option<V>>>;
 
+enum LeafInsertResult<K, V> {
+    Split(Leaf<K, V>),
+    Inserted(Option<V>),
+}
+
 impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
     fn new(next: Option<LeafIdx>) -> Leaf<K, V> {
         Leaf {
@@ -211,23 +216,18 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
             .and_then(move |i| self.data.get_mut(i).and_then(|v| v.as_mut()))
     }
 
-    // returns Some(Leaf<K, V>) if the node splits on insert, Some(V) if a value was overwriten
-    fn insert(&mut self,
-              key: K,
-              data: V,
-              index: Option<LeafIdx>)
-              -> (Option<Leaf<K, V>>, Option<V>) {
+    fn insert(&mut self, key: K, data: V, index: Option<LeafIdx>) -> LeafInsertResult<K, V> {
         let mut insert_key = Some(key);
         let mut insert_data = Some(data);
         for (k, p) in self.keys.iter_mut().zip(self.data.iter_mut()) {
             if k.is_none() {
                 *k = insert_key;
                 *p = insert_data;
-                return (None, None);
+                return LeafInsertResult::Inserted(None);
             } else if k == &mut insert_key {
                 std::mem::swap(p, &mut insert_data);
                 assert!(insert_data.is_some(), "Key missing data pair");
-                return (None, insert_data);
+                return LeafInsertResult::Inserted(insert_data);
             }
         }
 
@@ -235,13 +235,12 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
             (Some(key), Some(data)) => {
                 let mut new = self.split();
                 self.next = index;
-                if let (None, None) = new.insert(key, data, None) {
-                } else {
-                    panic!("New leaf shouldn't have to split");
+                match new.insert(key, data, None) {
+                    LeafInsertResult::Inserted(None) => LeafInsertResult::Split(new),
+                    _ => panic!("New leaf shouldn't have to split"),
                 }
-                (Some(new), None)
             }
-            (None, None) => (None, None),
+            (None, None) => LeafInsertResult::Inserted(None),
             (_, _) => panic!("Incomplete key data pair"),
         }
     }
@@ -276,36 +275,37 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
 #[derive(Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 struct Leaves<K, V>(Vec<Leaf<K, V>>);
 
+enum LeavesInsertResult<V> {
+    Inserted(Option<V>),
+    Split(Option<InnerIdx>, LeafIdx),
+}
+
 impl<K: Ord + Copy + Debug, V: Debug> Leaves<K, V> {
     // if the leaf is full the key of the inserted value must be inserted into the parent
     // returns (parent, new node idx, replaced)
-    fn insert(&mut self,
-              key: K,
-              value: V,
-              target: LeafIdx)
-              -> (Option<InnerIdx>, Option<NodeIndex>, Option<V>) {
+    fn insert(&mut self, key: K, value: V, target: LeafIdx) -> LeavesInsertResult<V> {
         if self.0.is_empty() {
             assert_eq!(target,
                        LeafIdx(0),
                        "should only be empty and receive a target 0");
             let mut leaf = Leaf::new(None);
-            if let (None, None) = leaf.insert(key, value, None) {
-            } else {
-                panic!("New leaf shouldn't have to split");
-            }
-            let parent = leaf.parent;
+            match leaf.insert(key, value, None) {
+                LeafInsertResult::Inserted(_) => (),
+                _ => panic!("New leaf shouldn't have to split"),
+            };
+            // let parent = leaf.parent;
             self.0.push(leaf);
-            return (parent, None, None);
+            return LeavesInsertResult::Inserted(None);
         }
 
         let last = LeafIdx(self.0.len());
-        let (new, replaced) = self[target].insert(key, value, Some(last));
-        if let Some(new) = new {
-            let parent = new.parent;
-            self.0.push(new);
-            (parent, Some(NodeIndex::Leaf(last)), replaced)
-        } else {
-            (self[target].parent, None, replaced)
+        match self[target].insert(key, value, Some(last)) {
+            LeafInsertResult::Inserted(r) => LeavesInsertResult::Inserted(r),
+            LeafInsertResult::Split(new) => {
+                let parent = new.parent;
+                self.0.push(new);
+                LeavesInsertResult::Split(parent, last)
+            }
         }
     }
 
@@ -440,14 +440,13 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         let leaf_idx = self.find_leaf_index(key);
-        let (mut parent, new_node_idx, replaced) = self.leaves.insert(key, value, leaf_idx);
-        let mut new_node_idx = if let Some(idx) = new_node_idx {
-            idx
-        } else {
-            return replaced;
+        let (mut parent, new_node_idx) = match self.leaves.insert(key, value, leaf_idx) {
+            LeavesInsertResult::Inserted(r) => return r,
+            LeavesInsertResult::Split(p, n) => (p, n),
         };
 
         let mut last = NodeIndex::Leaf(leaf_idx);
+        let mut new_node_idx = NodeIndex::Leaf(new_node_idx);
         while let Some(p) = parent {
             let new = self.inners[p].insert(key, new_node_idx);
             if let Some(new) = new {
@@ -458,13 +457,13 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
                 self.inners.0.push(new);
             } else {
                 // it fit, we are done inserting
-                return replaced;
+                return None;
             }
         }
 
         // single leaf is the root
         if self.leaves.0.len() == 1 {
-            return replaced;
+            return None;
         }
 
         let mut new_root = Inner::new();
@@ -484,7 +483,7 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
             }
             (_, _) => panic!("mismatched node index types"),
         }
-        replaced
+        None
     }
 
     fn leftmost_leaf(&self) -> LeafIdx {
