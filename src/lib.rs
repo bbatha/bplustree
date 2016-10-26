@@ -20,13 +20,13 @@ enum NodeIndex {
 
 impl From<InnerIdx> for NodeIndex {
     fn from(idx: InnerIdx) -> Self {
-        return NodeIndex::Inner(idx);
+        NodeIndex::Inner(idx)
     }
 }
 
 impl From<LeafIdx> for NodeIndex {
     fn from(idx: LeafIdx) -> Self {
-        return NodeIndex::Leaf(idx);
+        NodeIndex::Leaf(idx)
     }
 }
 
@@ -152,11 +152,11 @@ impl<K: Ord + Copy + Debug> Inners<K> {
         }
     }
 
-    fn get<'a>(&'a self, InnerIdx(idx): InnerIdx) -> Option<&'a Inner<K>> {
+    fn get(&self, InnerIdx(idx): InnerIdx) -> Option<&Inner<K>> {
         self.0.get(idx)
     }
 
-    fn get_mut<'a>(&'a mut self, InnerIdx(idx): InnerIdx) -> Option<&'a mut Inner<K>> {
+    fn get_mut(&mut self, InnerIdx(idx): InnerIdx) -> Option<&mut Inner<K>> {
         self.0.get_mut(idx)
     }
 }
@@ -164,13 +164,13 @@ impl<K: Ord + Copy + Debug> Inners<K> {
 impl<K: Copy + Ord + Debug> Index<InnerIdx> for Inners<K> {
     type Output = Inner<K>;
 
-    fn index<'a>(&'a self, idx: InnerIdx) -> &'a Self::Output {
+    fn index(&self, idx: InnerIdx) -> &Self::Output {
         self.get(idx).unwrap()
     }
 }
 
 impl<K: Copy + Ord + Debug> IndexMut<InnerIdx> for Inners<K> {
-    fn index_mut<'a>(&'a mut self, idx: InnerIdx) -> &'a mut Self::Output {
+    fn index_mut(&mut self, idx: InnerIdx) -> &mut Self::Output {
         self.get_mut(idx).unwrap()
     }
 }
@@ -202,14 +202,14 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
         }
     }
 
-    fn get<'a>(&'a self, key: K) -> Option<&'a V> {
+    fn get(&self, key: K) -> Option<&V> {
         self.keys
             .iter()
             .position(|k| &Some(key) == k)
             .and_then(|i| self.data.get(i).and_then(|v| v.as_ref()))
     }
 
-    fn get_mut<'a>(&'a mut self, key: K) -> Option<&'a mut V> {
+    fn get_mut(&mut self, key: K) -> Option<&mut V> {
         self.keys
             .iter()
             .position(|k| &Some(key) == k)
@@ -263,11 +263,11 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaf<K, V> {
         new
     }
 
-    fn iter<'a>(&'a self) -> LeafIter<'a, K, V> {
+    fn iter(&self) -> LeafIter<K, V> {
         self.keys.iter().zip(self.data.iter())
     }
 
-    fn iter_mut<'a>(&'a mut self) -> LeafIterMut<'a, K, V> {
+    fn iter_mut(&mut self) -> LeafIterMut<K, V> {
         self.keys.iter().zip(self.data.iter_mut())
     }
 }
@@ -309,22 +309,22 @@ impl<K: Ord + Copy + Debug, V: Debug> Leaves<K, V> {
         }
     }
 
-    fn get<'a>(&'a self, LeafIdx(idx): LeafIdx) -> Option<&'a Leaf<K, V>> {
+    fn get(&self, LeafIdx(idx): LeafIdx) -> Option<&Leaf<K, V>> {
         self.0.get(idx)
     }
 
-    fn get_mut<'a>(&'a mut self, LeafIdx(idx): LeafIdx) -> Option<&'a mut Leaf<K, V>> {
+    fn get_mut(&mut self, LeafIdx(idx): LeafIdx) -> Option<&mut Leaf<K, V>> {
         self.0.get_mut(idx)
     }
 
-    fn iter<'a>(&'a self, start: LeafIdx) -> LeavesIter<'a, K, V> {
+    fn iter(&self, start: LeafIdx) -> LeavesIter<K, V> {
         LeavesIter {
             leaves: &self.0,
             current: Some(start),
         }
     }
 
-    fn iter_mut<'a>(&'a mut self, start: LeafIdx) -> LeavesIterMut<'a, K, V> {
+    fn iter_mut(&mut self, start: LeafIdx) -> LeavesIterMut<K, V> {
         LeavesIterMut {
             leaves: &mut self.0,
             current: Some(start),
@@ -379,13 +379,13 @@ impl<'a, K, V> Iterator for LeavesIterMut<'a, K, V> {
 impl<K: Copy + Ord + Debug, V: Debug> Index<LeafIdx> for Leaves<K, V> {
     type Output = Leaf<K, V>;
 
-    fn index<'a>(&'a self, idx: LeafIdx) -> &'a Self::Output {
+    fn index(&self, idx: LeafIdx) -> &Self::Output {
         self.get(idx).unwrap()
     }
 }
 
 impl<K: Copy + Ord + Debug, V: Debug> IndexMut<LeafIdx> for Leaves<K, V> {
-    fn index_mut<'a>(&'a mut self, idx: LeafIdx) -> &'a mut Self::Output {
+    fn index_mut(&mut self, idx: LeafIdx) -> &mut Self::Output {
         self.get_mut(idx).unwrap()
     }
 }
@@ -419,11 +419,11 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
         }
     }
 
-    pub fn get<'a>(&'a self, key: K) -> Option<&'a V> {
+    pub fn get(&self, key: K) -> Option<&V> {
         self.leaves[self.find_leaf_index(key)].get(key)
     }
 
-    pub fn get_mut<'a>(&'a mut self, key: K) -> Option<&'a mut V> {
+    pub fn get_mut(&mut self, key: K) -> Option<&mut V> {
         let idx = self.find_leaf_index(key);
         self.leaves[idx].get_mut(key)
     }
@@ -499,11 +499,11 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
         }
     }
 
-    pub fn iter<'a>(&'a self) -> Iter<'a, K, V> {
+    pub fn iter(&self) -> Iter<K, V> {
         Iter(self.leaves.iter(self.leftmost_leaf()).flat_map(Leaf::iter))
     }
 
-    pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, K, V> {
+    pub fn iter_mut(&mut self) -> IterMut<K, V> {
         let start = self.leftmost_leaf();
         IterMut(self.leaves.iter_mut(start).flat_map(Leaf::iter_mut))
     }
@@ -513,21 +513,23 @@ impl<K: Copy + Ord + Debug, V: Debug> BPlusTree<K, V> {
 impl<K: Copy + Ord + Debug, V: Debug> Index<K> for BPlusTree<K, V> {
     type Output = V;
 
-    fn index<'a>(&'a self, key: K) -> &'a Self::Output {
+    fn index(&self, key: K) -> &Self::Output {
         self.get(key).unwrap()
     }
 }
 
 impl<K: Copy + Ord + Debug, V: Debug> IndexMut<K> for BPlusTree<K, V> {
-    fn index_mut<'a>(&'a mut self, key: K) -> &'a mut Self::Output {
+    fn index_mut(&mut self, key: K) -> &mut Self::Output {
         self.get_mut(key).unwrap()
     }
 }
 
+type PageIter<'a, K, V> = iter::FlatMap<LeavesIter<'a, K, V>,
+                                        LeafIter<'a, K, V>,
+                                        fn(&'a Leaf<K, V>) -> LeafIter<'a, K, V>>;
+
 // impl trait methods would be killer here
-pub struct Iter<'a, K: 'a, V: 'a>(iter::FlatMap<LeavesIter<'a, K, V>,
-                                                LeafIter<'a, K, V>,
-                                                fn(&'a Leaf<K, V>) -> LeafIter<'a, K, V>>);
+pub struct Iter<'a, K: 'a, V: 'a>(PageIter<'a, K, V>);
 
 impl<'a, K, V> Iterator for Iter<'a, K, V>
     where K: 'a + Copy + Ord + Debug,
@@ -545,10 +547,11 @@ impl<'a, K, V> Iterator for Iter<'a, K, V>
     }
 }
 
+type PageIterMut<'a, K, V> = iter::FlatMap<LeavesIterMut<'a, K, V>,
+                                           LeafIterMut<'a, K, V>,
+                                           fn(&'a mut Leaf<K, V>) -> LeafIterMut<'a, K, V>>;
 
-pub struct IterMut<'a, K: 'a, V: 'a>(iter::FlatMap<LeavesIterMut<'a, K, V>,
-                                                   LeafIterMut<'a, K, V>,
-                                                   fn(&'a mut Leaf<K, V>) -> LeafIterMut<'a, K, V>>);
+pub struct IterMut<'a, K: 'a, V: 'a>(PageIterMut<'a, K, V>);
 
 impl<'a, K, V> Iterator for IterMut<'a, K, V>
     where K: 'a + Copy + Ord + Debug,
